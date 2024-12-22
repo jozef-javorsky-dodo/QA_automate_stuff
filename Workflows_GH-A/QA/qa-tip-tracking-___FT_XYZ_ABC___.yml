@@ -1,0 +1,121 @@
+name: QA - Tip tracking (___FT_XYZ_ABC___)
+
+on:
+  schedule:
+    - cron: '0 0 * * 1-6'  # Run every night at 00:00 AM UTC except Sunday
+  workflow_dispatch:     # Run manually
+
+jobs:
+  tip-tracking-test:
+    runs-on: [self-hosted, ___FT_XYZ_ABC___]
+    timeout-minutes: 600
+    env:
+      ___FT_XYZ_ABC____REFERENCE_DATA_DIR: /opt/___FT_XYZ_ABC___-versions/reference-version/datadir
+      ___FT_XYZ_ABC____TESTBED_DATA_DIR: /opt/___FT_XYZ_ABC___-testbed/datadir
+      ___FT_XYZ_ABC____QA_PATH: /home/qarunner/___FT_XYZ_ABC___-qa
+      TRACKING_TIME_SECONDS: 14400 # 4 hours
+      TOTAL_TIME_SECONDS: 28800 # 8 hours
+      CHAIN: gnosis
+
+    steps:
+    - name: Check out repository
+      uses: actions/checkout@v4
+
+    - name: Clean ___FT_XYZ_ABC___ Build Directory
+      run: |
+        make clean
+
+    - name: Build ___FT_XYZ_ABC___
+      run: |
+        make ___FT_XYZ_ABC___
+      working-directory: ${{ github.workspace }}
+
+    - name: Pause the ___FT_XYZ_ABC___ instance dedicated to db maintenance
+      run: |
+        python3 $___FT_XYZ_ABC____QA_PATH/test_system/db-producer/pause_production.py || true
+
+    - name: Restore ___FT_XYZ_ABC___ Testbed Data Directory
+      run: |
+        rsync -a --delete $___FT_XYZ_ABC____REFERENCE_DATA_DIR/ $___FT_XYZ_ABC____TESTBED_DATA_DIR/
+
+    - name: Run ___FT_XYZ_ABC___, wait sync and check ability to maintain sync
+      id: test_step
+      run: |
+        set +e # Disable exit on error
+        
+        # 1. Launch the testbed ___FT_XYZ_ABC___ instance
+        # 2. Allow time for the ___FT_XYZ_ABC___ to achieve synchronization
+        # 3. Begin timing the duration that ___FT_XYZ_ABC___ maintains synchronization
+        python3 $___FT_XYZ_ABC____QA_PATH/test_system/qa-tests/tip-tracking/run_and_check_tip_tracking.py \
+          ${{ github.workspace }}/build/bin $___FT_XYZ_ABC____TESTBED_DATA_DIR $TRACKING_TIME_SECONDS $TOTAL_TIME_SECONDS ___FT_XYZ_ABC___3 $CHAIN
+  
+        # Capture monitoring script exit status
+        test_exit_status=$?
+        
+        # Save the subsection reached status
+        echo "::set-output name=test_executed::true"
+    
+        # Clean up ___FT_XYZ_ABC___ process if it's still running
+        if kill -0 $___FT_XYZ_ABC____PID 2> /dev/null; then
+          echo "Terminating ___FT_XYZ_ABC___"
+          kill $___FT_XYZ_ABC____PID
+          wait $___FT_XYZ_ABC____PID
+        fi
+
+        # Check test runner script exit status
+        if [ $test_exit_status -eq 0 ]; then
+          echo "Tests completed successfully"
+          echo "TEST_RESULT=success" >> "$GITHUB_OUTPUT"
+        else
+          echo "Error detected during tests"
+          echo "TEST_RESULT=failure" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Save test results
+      if: steps.test_step.outputs.test_executed == 'true'
+      env:
+        TEST_RESULT: ${{ steps.test_step.outputs.TEST_RESULT }}
+      run: |
+        db_version=$(python3 $___FT_XYZ_ABC____QA_PATH/test_system/qa-tests/uploads/prod_info.py $___FT_XYZ_ABC____REFERENCE_DATA_DIR/../production.ini production ___FT_XYZ_ABC____repo_commit)
+        if [ -z "$db_version" ]; then
+          db_version="no-version"
+        fi
+        
+        python3 $___FT_XYZ_ABC____QA_PATH/test_system/qa-tests/uploads/upload_test_results.py \
+          --repo ___FT_XYZ_ABC___ \
+          --commit $(git rev-parse HEAD) \
+          --branch ${{ github.ref_name }} \
+          --test_name tip-tracking \
+          --chain $CHAIN \
+          --runner ${{ runner.name }} \
+          --db_version $db_version \
+          --outcome $TEST_RESULT \
+          --result_file ${{ github.workspace }}/result-$CHAIN.json
+
+    - name: Upload test results
+      if: steps.test_step.outputs.test_executed == 'true'
+      uses: actions/upload-artifact@v4
+      with:
+        name: test-results
+        path: |
+          ${{ github.workspace }}/result-${{ env.CHAIN }}.json
+          ${{ env.___FT_XYZ_ABC____TESTBED_DATA_DIR }}/logs/___FT_XYZ_ABC___.log
+
+    - name: Delete ___FT_XYZ_ABC___ Testbed Data Directory
+      if: always()
+      run: |
+        rm -rf $___FT_XYZ_ABC____TESTBED_DATA_DIR
+
+    - name: Resume the ___FT_XYZ_ABC___ instance dedicated to db maintenance
+      run: |
+        python3 $___FT_XYZ_ABC____QA_PATH/test_system/db-producer/resume_production.py || true
+
+    - name: Action for Success
+      if: steps.test_step.outputs.TEST_RESULT == 'success'
+      run: echo "::notice::Tests completed successfully"
+
+    - name: Action for Not Success
+      if: steps.test_step.outputs.TEST_RESULT != 'success'
+      run: |
+        echo "::error::Error detected during tests"
+        exit 1
